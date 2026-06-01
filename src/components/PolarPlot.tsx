@@ -7,6 +7,8 @@ interface Props {
   tracks: SatelliteTrack[];
   selectedSatelliteId?: string;
   onSelectPass?: (id: string) => void;
+  observerLat: number;
+  observerLon: number;
 }
 
 const SIZE = 500;
@@ -67,7 +69,7 @@ function groupByVisibility(points: PassPoint[]): { visible: boolean; pts: PassPo
   return segs;
 }
 
-export function PolarPlot({ tracks, selectedSatelliteId, onSelectPass }: Props) {
+export function PolarPlot({ tracks, selectedSatelliteId, onSelectPass, observerLat, observerLon }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [tooltip, setTooltip] = useState<Tooltip | null>(null);
 
@@ -192,7 +194,7 @@ export function PolarPlot({ tracks, selectedSatelliteId, onSelectPass }: Props) 
                       {/* Selection glow */}
                       {isSelected && (
                         <path d={d} fill="none" stroke={track.color}
-                          strokeWidth="10" strokeOpacity="0.15"
+                          strokeWidth="6" strokeOpacity="0.15"
                           strokeLinecap="round" strokeLinejoin="round"
                           pointerEvents="none" />
                       )}
@@ -209,35 +211,27 @@ export function PolarPlot({ tracks, selectedSatelliteId, onSelectPass }: Props) 
                       <path
                         d={d} fill="none"
                         stroke={track.color}
-                        strokeWidth={isSelected ? 3 : 2}
+                        strokeWidth={isSelected ? 1.5 : 1}
                         strokeOpacity={isSelected ? 1 : 0.65}
                         strokeLinecap="round" strokeLinejoin="round"
                         pointerEvents="none"
                       />
 
-                      {/* AOS */}
+                      {/* AOS — label above dot */}
                       <circle cx={sx} cy={sy} r={5} fill={track.color} opacity={0.9} pointerEvents="none" />
-                      <text x={sx + 8} y={sy - 6} fill={track.color} fontSize="10"
+                      <text x={sx + 8} y={sy - 5} fill={track.color} fontSize="10"
                         fontFamily="monospace" opacity={isSelected ? 1 : 0.6} pointerEvents="none">
                         AOS
                       </text>
 
-                      {/* LOS */}
+                      {/* LOS — label below dot so it stays readable when AOS/LOS are coincident */}
                       <circle cx={ex} cy={ey} r={5} fill="none"
-                        stroke={track.color} strokeWidth="2" opacity={0.8} pointerEvents="none" />
-                      <text x={ex + 8} y={ey - 6} fill={track.color} fontSize="10"
+                        stroke={track.color} strokeWidth="1.5" opacity={0.8} pointerEvents="none" />
+                      <text x={ex + 8} y={ey + 13} fill={track.color} fontSize="10"
                         fontFamily="monospace" opacity={isSelected ? 0.9 : 0.5} pointerEvents="none">
                         LOS
                       </text>
 
-                      {/* Max elevation */}
-                      <circle cx={mx} cy={my} r={4} fill="white" opacity={0.75} pointerEvents="none" />
-                      {isSelected && (
-                        <text x={mx + 7} y={my - 6} fill="white" fontSize="10"
-                          fontFamily="monospace" opacity={0.85} pointerEvents="none">
-                          {maxPt.elevation.toFixed(1)}°
-                        </text>
-                      )}
                     </g>
                   );
                 })}
@@ -245,9 +239,23 @@ export function PolarPlot({ tracks, selectedSatelliteId, onSelectPass }: Props) 
             );
           })}
 
-          {/* Zenith dot */}
-          <circle cx={CENTER} cy={CENTER} r={4} fill="#1e3a5f" />
-          <circle cx={CENTER} cy={CENTER} r={2} fill="#60a5fa" opacity={0.85} />
+          {/* Observer marker (zenith = directly overhead) */}
+          <circle cx={CENTER} cy={CENTER} r={7} fill="#fbbf24" opacity={0.9} />
+          <circle cx={CENTER} cy={CENTER} r={3} fill="#ffffff" opacity={0.95} />
+          <text
+            x={CENTER + 11} y={CENTER - 8}
+            fill="#fbbf24" fontSize="10" fontFamily="monospace"
+            opacity={0.9}
+          >
+            {Math.abs(observerLat).toFixed(2)}°{observerLat >= 0 ? 'N' : 'S'}
+          </text>
+          <text
+            x={CENTER + 11} y={CENTER + 4}
+            fill="#fbbf24" fontSize="10" fontFamily="monospace"
+            opacity={0.9}
+          >
+            {Math.abs(observerLon).toFixed(2)}°{observerLon >= 0 ? 'E' : 'W'}
+          </text>
         </svg>
 
         {/* Hover tooltip */}

@@ -12,6 +12,9 @@ export const PASS_COLORS = [
   '#f472b6', // pink
 ];
 
+const DEG2RAD = Math.PI / 180;
+const RAD2DEG = 180 / Math.PI;
+
 interface ParsedTLE {
   name: string;
   line1: string;
@@ -26,11 +29,7 @@ function parseTLEText(text: string): ParsedTLE | null {
 
   if (lines.length < 2) return null;
 
-  if (
-    lines.length >= 3 &&
-    lines[1].startsWith('1 ') &&
-    lines[2].startsWith('2 ')
-  ) {
+  if (lines.length >= 3 && lines[1].startsWith('1 ') && lines[2].startsWith('2 ')) {
     return { name: lines[0], line1: lines[1], line2: lines[2] };
   }
 
@@ -63,9 +62,90 @@ function buildPass(
     maxElevationTime: maxElPoint.time,
     maxElevationAzimuth: maxElPoint.azimuth,
     duration:
-      (points[points.length - 1].time.getTime() - points[0].time.getTime()) /
-      1000,
+      (points[points.length - 1].time.getTime() - points[0].time.getTime()) / 1000,
   };
+}
+
+type ObserverGd = { longitude: number; latitude: number; height: number };
+
+// Propagate one point. Returns null if propagation fails.
+function computePoint(
+  satrec: satellite.SatRec,
+  date: Date,
+  observerGd: ObserverGd,
+  minElevationDeg: number
+): PassPoint | null {
+  let posVel: ReturnType<typeof satellite.propagate>;
+  try {
+    posVel = satellite.propagate(satrec, date);
+  } catch {
+    return null;
+  }
+  const pos = posVel.position;
+  if (!pos || typeof pos === 'boolean') return null;
+
+  const gmst = satellite.gstime(date);
+  const posEcf = satellite.eciToEcf(pos as { x: number; y: number; z: number }, gmst);
+  const look = satellite.ecfToLookAngles(
+    observerGd,
+    posEcf as { x: number; y: number; z: number }
+  );
+
+  const elDeg = look.elevation * RAD2DEG;
+  const azDeg = ((look.azimuth * RAD2DEG % 360) + 360) % 360;
+  const ecf = posEcf as { x: number; y: number; z: number };
+  const rKm = Math.sqrt(ecf.x ** 2 + ecf.y ** 2 + ecf.z ** 2);
+
+  return {
+    time: date,
+    azimuth: azDeg,
+    elevation: elDeg,
+    range: look.rangeSat,
+    satLat: Math.asin(ecf.z / rKm) * RAD2DEG,
+    satLon: Math.atan2(ecf.y, ecf.x) * RAD2DEG,
+    satAlt: rKm - 6371,
+    visible: elDeg >= minElevationDeg,
+  };
+}
+
+// Binary search for the precise moment elevation crosses minElevationDeg.
+// t0Ms: the 30s step on the "below threshold" side.
+// t1Ms: the 30s step on the "above threshold" side.
+// ascending: true = AOS (below→above), false = LOS (above→below).
+// After 10 iterations the window is 30000ms / 2^10 ≈ 0.03 s wide.
+function refineCrossing(
+  satrec: satellite.SatRec,
+  observerGd: ObserverGd,
+  t0Ms: number,
+  t1Ms: number,
+  minElevationDeg: number,
+  ascending: boolean,
+  iterations = 10
+): PassPoint | null {
+  let loMs = Math.min(t0Ms, t1Ms); // side below threshold
+  let hiMs = Math.max(t0Ms, t1Ms); // side above threshold
+
+  for (let i = 0; i < iterations; i++) {
+    const midMs = (loMs + hiMs) / 2;
+    const pt = computePoint(satrec, new Date(midMs), observerGd, minElevationDeg);
+    if (!pt) break;
+
+    if (ascending) {
+      // AOS: lo stays below, hi stays above — converge hi downward
+      if (pt.elevation < minElevationDeg) loMs = midMs;
+      else hiMs = midMs;
+    } else {
+      // LOS: lo stays above, hi stays below — converge lo upward
+      if (pt.elevation >= minElevationDeg) loMs = midMs;
+      else hiMs = midMs;
+    }
+  }
+
+  // AOS → first moment above threshold (hiMs); LOS → last moment above (loMs)
+  const refinedMs = ascending ? hiMs : loMs;
+  const pt = computePoint(satrec, new Date(refinedMs), observerGd, minElevationDeg);
+  if (pt) pt.visible = true; // crossing point always belongs to the visible window
+  return pt;
 }
 
 export function predictPasses(
@@ -75,10 +155,7 @@ export function predictPasses(
   minElevationDeg = 0,
   stepSeconds = 30
 ): { passes: SatellitePass[]; tracks: SatelliteTrack[] } {
-  const DEG2RAD = Math.PI / 180;
-  const RAD2DEG = 180 / Math.PI;
-
-  const observerGd = {
+  const observerGd: ObserverGd = {
     longitude: observer.longitude * DEG2RAD,
     latitude: observer.latitude * DEG2RAD,
     height: observer.altitude / 1000,
@@ -106,84 +183,65 @@ export function predictPasses(
 
     const color = PASS_COLORS[ei % PASS_COLORS.length];
     const satName = entry.name.trim() || parsed.name;
-    let currentPoints: PassPoint[] = [];   // visible points in current pass window
-    const trackPoints: PassPoint[] = [];   // ALL points across the prediction window
+    let currentPoints: PassPoint[] = [];
+    const trackPoints: PassPoint[] = [];
+    let prevPoint: PassPoint | null = null;
 
     for (let t = now.getTime(); t <= endMs; t += stepMs) {
-      const date = new Date(t);
-      let posVel: ReturnType<typeof satellite.propagate>;
+      const point = computePoint(satrec, new Date(t), observerGd, minElevationDeg);
 
-      try {
-        posVel = satellite.propagate(satrec, date);
-      } catch {
-        // Propagation failed — seal any in-progress visible pass and skip this step
+      if (!point) {
+        // Propagation failed — seal any in-progress pass and reset
         if (currentPoints.length >= 2) {
           const passId = `p${passCounter++}`;
           currentPoints.forEach(pt => { pt.passId = passId; });
           allPasses.push(buildPass(passId, entry, satName, color, currentPoints));
         }
         currentPoints = [];
+        prevPoint = null;
         continue;
       }
 
-      const pos = posVel.position;
-      if (!pos || typeof pos === 'boolean') {
-        if (currentPoints.length >= 2) {
-          const passId = `p${passCounter++}`;
-          currentPoints.forEach(pt => { pt.passId = passId; });
-          allPasses.push(buildPass(passId, entry, satName, color, currentPoints));
+      if (prevPoint !== null) {
+        if (!prevPoint.visible && point.visible) {
+          // ── AOS crossing detected ──────────────────────────────────────────
+          // Binary-search for the exact moment elevation reaches minElevationDeg
+          const aosPoint = refineCrossing(
+            satrec, observerGd,
+            prevPoint.time.getTime(), t,
+            minElevationDeg, true
+          );
+          if (aosPoint) {
+            trackPoints.push(aosPoint);   // insert refined AOS into the track
+            currentPoints = [aosPoint];   // start new pass at exact threshold
+          }
+        } else if (prevPoint.visible && !point.visible) {
+          // ── LOS crossing detected ──────────────────────────────────────────
+          // Binary-search for the exact moment elevation drops to minElevationDeg
+          const losPoint = refineCrossing(
+            satrec, observerGd,
+            prevPoint.time.getTime(), t,
+            minElevationDeg, false
+          );
+          if (losPoint) {
+            currentPoints.push(losPoint); // close pass at exact threshold
+            trackPoints.push(losPoint);   // insert refined LOS into the track
+          }
+          if (currentPoints.length >= 2) {
+            const passId = `p${passCounter++}`;
+            currentPoints.forEach(pt => { pt.passId = passId; });
+            allPasses.push(buildPass(passId, entry, satName, color, currentPoints));
+          }
+          currentPoints = [];
         }
-        currentPoints = [];
-        continue;
       }
 
-      const gmst = satellite.gstime(date);
-      const posEcf = satellite.eciToEcf(
-        pos as { x: number; y: number; z: number },
-        gmst
-      );
-      const look = satellite.ecfToLookAngles(
-        observerGd,
-        posEcf as { x: number; y: number; z: number }
-      );
-
-      const elDeg = look.elevation * RAD2DEG;
-      const azDeg = ((look.azimuth * RAD2DEG % 360) + 360) % 360;
-
-      const ecf = posEcf as { x: number; y: number; z: number };
-      const rKm = Math.sqrt(ecf.x ** 2 + ecf.y ** 2 + ecf.z ** 2);
-      const satLat = Math.asin(ecf.z / rKm) * RAD2DEG;
-      const satLon = Math.atan2(ecf.y, ecf.x) * RAD2DEG;
-      const satAlt = rKm - 6371;
-
-      const visible = elDeg >= minElevationDeg;
-      const point: PassPoint = {
-        time: date,
-        azimuth: azDeg,
-        elevation: elDeg,
-        range: look.rangeSat,
-        satLat,
-        satLon,
-        satAlt,
-        visible,
-      };
-
-      // Full track always gets this point
       trackPoints.push(point);
-
-      if (visible) {
-        currentPoints.push(point);
-      } else {
-        if (currentPoints.length >= 2) {
-          const passId = `p${passCounter++}`;
-          // Mutate the shared point objects — trackPoints references the same instances
-          currentPoints.forEach(pt => { pt.passId = passId; });
-          allPasses.push(buildPass(passId, entry, satName, color, currentPoints));
-        }
-        currentPoints = [];
-      }
+      if (point.visible) currentPoints.push(point);
+      prevPoint = point;
     }
 
+    // Seal a pass that extends to the end of the prediction window
     if (currentPoints.length >= 2) {
       const passId = `p${passCounter++}`;
       currentPoints.forEach(pt => { pt.passId = passId; });
@@ -191,12 +249,7 @@ export function predictPasses(
     }
 
     if (trackPoints.length >= 2) {
-      allTracks.push({
-        satelliteId: entry.id,
-        satelliteName: satName,
-        color,
-        points: trackPoints,
-      });
+      allTracks.push({ satelliteId: entry.id, satelliteName: satName, color, points: trackPoints });
     }
   }
 

@@ -179,6 +179,8 @@ export default function Home() {
                 tracks={tracks}
                 selectedSatelliteId={selectedSatelliteId}
                 onSelectPass={setSelectedId}
+                observerLat={location.latitude}
+                observerLon={location.longitude}
               />
             </div>
 
