@@ -24,14 +24,11 @@ const DEFAULT_LOCATION: ObserverLocation = {
   altitude: 30,
 };
 
-function makeEntry(): TLEEntry {
-  return { id: crypto.randomUUID(), name: '', text: '' };
-}
 
 type ViewMode = 'sky' | 'globe';
 
 export default function Home() {
-  const [entries, setEntries] = useState<TLEEntry[]>([makeEntry()]);
+  const [entries, setEntries] = useState<TLEEntry[]>([]);
   const [location, setLocation] = useState<ObserverLocation>(DEFAULT_LOCATION);
   const [durationDays, setDurationDays] = useState(3);
   const [minEl, setMinEl] = useState(5);

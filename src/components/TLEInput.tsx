@@ -9,8 +9,6 @@ interface Props {
   onChange: (entries: TLEEntry[]) => void;
 }
 
-// ── TLE file parser ──────────────────────────────────────────────────────────
-// Handles 2-line and 3-line (with name) formats, single or multi-satellite.
 function parseTLEText(text: string): Array<{ name: string; line1: string; line2: string }> {
   const lines = text
     .split('\n')
@@ -25,14 +23,12 @@ function parseTLEText(text: string): Array<{ name: string; line1: string; line2:
     const b = lines[i + 1];
     const c = lines[i + 2];
 
-    // 3-line: name, line1, line2
     if (!a.startsWith('1 ') && !a.startsWith('2 ') && b?.startsWith('1 ') && c?.startsWith('2 ')) {
       results.push({ name: a, line1: b, line2: c });
       i += 3;
       continue;
     }
 
-    // 2-line: line1, line2 (no name)
     if (a.startsWith('1 ') && b?.startsWith('2 ')) {
       const catNum = a.substring(2, 7).trim();
       results.push({ name: `SAT ${catNum}`, line1: a, line2: b });
@@ -55,7 +51,6 @@ function readFile(file: File): Promise<string> {
   });
 }
 
-// ── Upload drop zone ─────────────────────────────────────────────────────────
 function UploadZone({ onFiles }: { onFiles: (files: File[]) => void }) {
   const [dragging, setDragging] = useState(false);
 
@@ -71,7 +66,7 @@ function UploadZone({ onFiles }: { onFiles: (files: File[]) => void }) {
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
     if (files.length) onFiles(files);
-    e.target.value = ''; // allow re-uploading same file
+    e.target.value = '';
   };
 
   return (
@@ -80,42 +75,27 @@ function UploadZone({ onFiles }: { onFiles: (files: File[]) => void }) {
       onDragEnter={e => { e.preventDefault(); setDragging(true); }}
       onDragLeave={() => setDragging(false)}
       onDrop={handleDrop}
-      className={`flex flex-col items-center justify-center gap-2 px-4 py-6 rounded-xl border-2 border-dashed cursor-pointer select-none transition-colors ${
+      className={`flex flex-col items-center justify-center gap-2 px-4 py-5 rounded-xl border-2 border-dashed cursor-pointer select-none transition-colors ${
         dragging
           ? 'border-blue-400 bg-blue-900/20 text-blue-300'
           : 'border-gray-700 hover:border-gray-500 hover:bg-gray-800/30 text-gray-400'
       }`}
     >
       <input type="file" accept=".txt,.tle" multiple onChange={handleChange} className="sr-only" />
-      <svg
-        className="w-8 h-8 opacity-60"
-        fill="none"
-        viewBox="0 0 24 24"
-        stroke="currentColor"
-        strokeWidth={1.5}
-      >
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5"
-        />
+      <svg className="w-7 h-7 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+        <path strokeLinecap="round" strokeLinejoin="round"
+          d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
       </svg>
       <div className="text-center">
-        <p className="text-sm font-medium">
-          {dragging ? 'Drop to load' : 'Drop TLE file here'}
-        </p>
-        <p className="text-xs mt-0.5 text-gray-600">
-          or click to browse &nbsp;·&nbsp; .txt or .tle &nbsp;·&nbsp; one or multiple files
-        </p>
+        <p className="text-sm font-medium">{dragging ? 'Drop to load' : 'Drop TLE file here'}</p>
+        <p className="text-xs mt-0.5 text-gray-600">or click to browse · .txt or .tle</p>
       </div>
     </label>
   );
 }
 
-// ── Main component ────────────────────────────────────────────────────────────
 export function TLEInput({ entries, onChange }: Props) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [showManual, setShowManual] = useState(false);
   const [manualText, setManualText] = useState('');
   const [statusMsg, setStatusMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
@@ -124,7 +104,6 @@ export function TLEInput({ entries, onChange }: Props) {
     setTimeout(() => setStatusMsg(null), 4000);
   }
 
-  // Parse one or more uploaded files and append to entries
   const handleFiles = useCallback(
     async (files: File[]) => {
       try {
@@ -160,20 +139,21 @@ export function TLEInput({ entries, onChange }: Props) {
     [entries, onChange]
   );
 
+  // Live parse result for the manual textarea
+  const manualParsed = manualText.trim() ? parseTLEText(manualText) : [];
+
   function addManual() {
-    const parsed = parseTLEText(manualText);
-    if (parsed.length === 0) {
+    if (manualParsed.length === 0) {
       flash('No valid TLE detected in the pasted text.', false);
       return;
     }
-    const newEntries: TLEEntry[] = parsed.map(p => ({
+    const newEntries: TLEEntry[] = manualParsed.map(p => ({
       id: crypto.randomUUID(),
       name: p.name,
       text: `${p.name}\n${p.line1}\n${p.line2}`,
     }));
     onChange([...entries, ...newEntries]);
     setManualText('');
-    setShowManual(false);
     flash(`${newEntries.length} satellite${newEntries.length > 1 ? 's' : ''} added`);
   }
 
@@ -181,8 +161,19 @@ export function TLEInput({ entries, onChange }: Props) {
     onChange(entries.filter(e => e.id !== id));
   }
 
-  function updateEntry(id: string, patch: Partial<TLEEntry>) {
-    onChange(entries.map(e => (e.id === id ? { ...e, ...patch } : e)));
+  function updateEntryText(id: string, text: string) {
+    // Auto-sync the name from the first non-TLE line of the pasted text
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    const nameLine = lines.find(l => !l.startsWith('1 ') && !l.startsWith('2 '));
+    onChange(entries.map(e =>
+      e.id === id
+        ? { ...e, text, ...(nameLine ? { name: nameLine } : {}) }
+        : e
+    ));
+  }
+
+  function updateEntryName(id: string, name: string) {
+    onChange(entries.map(e => e.id === id ? { ...e, name } : e));
   }
 
   function clearAll() {
@@ -192,7 +183,7 @@ export function TLEInput({ entries, onChange }: Props) {
 
   return (
     <div className="space-y-3">
-      {/* ── Header ── */}
+      {/* Header */}
       <div className="flex items-center justify-between">
         <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
           TLE Data
@@ -203,39 +194,27 @@ export function TLEInput({ entries, onChange }: Props) {
           )}
         </h2>
         {entries.length > 0 && (
-          <button
-            onClick={clearAll}
-            className="text-xs text-gray-600 hover:text-red-400 transition-colors"
-          >
+          <button onClick={clearAll} className="text-xs text-gray-600 hover:text-red-400 transition-colors">
             Clear all
           </button>
         )}
       </div>
 
-      {/* ── Primary: file upload ── */}
+      {/* File upload */}
       <UploadZone onFiles={handleFiles} />
 
-      {/* Upload status */}
+      {/* Status message */}
       {statusMsg && (
-        <p
-          className={`text-xs text-center ${
-            statusMsg.ok ? 'text-green-400' : 'text-red-400'
-          }`}
-        >
-          {statusMsg.ok ? '✓ ' : '✗ '}
-          {statusMsg.text}
+        <p className={`text-xs text-center ${statusMsg.ok ? 'text-green-400' : 'text-red-400'}`}>
+          {statusMsg.ok ? '✓ ' : '✗ '}{statusMsg.text}
         </p>
       )}
 
-      {/* ── Satellite list ── */}
+      {/* Satellite list */}
       {entries.length > 0 && (
         <div className="space-y-1.5">
           {entries.map((entry, i) => (
-            <div
-              key={entry.id}
-              className="bg-gray-900 rounded-lg border border-gray-700 overflow-hidden"
-            >
-              {/* Row header */}
+            <div key={entry.id} className="bg-gray-900 rounded-lg border border-gray-700 overflow-hidden">
               <div className="flex items-center gap-2 px-3 py-2">
                 <span
                   className="w-2.5 h-2.5 rounded-full flex-shrink-0"
@@ -244,13 +223,11 @@ export function TLEInput({ entries, onChange }: Props) {
                 <input
                   type="text"
                   value={entry.name}
-                  onChange={e => updateEntry(entry.id, { name: e.target.value })}
+                  onChange={e => updateEntryName(entry.id, e.target.value)}
                   className="flex-1 min-w-0 bg-transparent text-white text-xs font-medium focus:outline-none truncate"
                 />
                 <button
-                  onClick={() =>
-                    setExpandedId(expandedId === entry.id ? null : entry.id)
-                  }
+                  onClick={() => setExpandedId(expandedId === entry.id ? null : entry.id)}
                   title="View / edit TLE"
                   className="text-gray-600 hover:text-gray-300 text-xs px-1 transition-colors leading-none"
                 >
@@ -265,12 +242,11 @@ export function TLEInput({ entries, onChange }: Props) {
                 </button>
               </div>
 
-              {/* Expandable TLE text editor */}
               {expandedId === entry.id && (
                 <div className="border-t border-gray-700 px-3 pt-2 pb-3">
                   <textarea
                     value={entry.text}
-                    onChange={e => updateEntry(entry.id, { text: e.target.value })}
+                    onChange={e => updateEntryText(entry.id, e.target.value)}
                     rows={4}
                     spellCheck={false}
                     className="w-full bg-gray-950 text-green-400 text-xs font-mono rounded px-2 py-2 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none leading-relaxed"
@@ -282,48 +258,32 @@ export function TLEInput({ entries, onChange }: Props) {
         </div>
       )}
 
-      {/* ── Secondary: manual text entry ── */}
-      <div className="pt-1">
-        <button
-          onClick={() => setShowManual(v => !v)}
-          className="text-xs text-gray-600 hover:text-gray-300 transition-colors flex items-center gap-1"
-        >
-          <span className="text-gray-700">{showManual ? '▼' : '▶'}</span>
-          Enter TLE manually
-        </button>
-
-        {showManual && (
-          <div className="mt-2 space-y-2">
-            <textarea
-              placeholder={
-                'Paste TLE text (2 or 3 lines per satellite):\n\nCOMS 1\n1 36744U 10032A ...\n2 36744 ...'
-              }
-              value={manualText}
-              onChange={e => setManualText(e.target.value)}
-              rows={6}
-              spellCheck={false}
-              className="w-full bg-gray-950 text-green-400 text-xs font-mono rounded px-2 py-2 placeholder-gray-700 border border-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none leading-relaxed"
-            />
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => {
-                  setShowManual(false);
-                  setManualText('');
-                }}
-                className="text-xs text-gray-600 hover:text-gray-300 px-2 py-1 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={addManual}
-                disabled={!manualText.trim()}
-                className="text-xs px-3 py-1 bg-blue-700 hover:bg-blue-600 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded transition-colors"
-              >
-                Add
-              </button>
-            </div>
-          </div>
+      {/* Manual paste — always visible, no toggle needed */}
+      <div className="space-y-2 pt-1">
+        <p className="text-xs text-gray-600">Or paste TLE text directly:</p>
+        <textarea
+          placeholder={'SES-5\n1 38652U 12036A ...\n2 38652 ...'}
+          value={manualText}
+          onChange={e => setManualText(e.target.value)}
+          rows={4}
+          spellCheck={false}
+          className="w-full bg-gray-950 text-green-400 text-xs font-mono rounded px-2 py-2 placeholder-gray-700 border border-gray-700 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none leading-relaxed"
+        />
+        {/* Live detection feedback */}
+        {manualText.trim() && (
+          <p className={`text-xs ${manualParsed.length > 0 ? 'text-green-500' : 'text-red-400'}`}>
+            {manualParsed.length > 0
+              ? `✓ Detected: ${manualParsed.map(p => p.name).join(', ')}`
+              : '✗ No valid TLE detected'}
+          </p>
         )}
+        <button
+          onClick={addManual}
+          disabled={manualParsed.length === 0}
+          className="w-full text-xs py-1.5 bg-blue-700 hover:bg-blue-600 disabled:bg-gray-700 disabled:text-gray-500 text-white rounded transition-colors"
+        >
+          Add Satellite
+        </button>
       </div>
     </div>
   );
